@@ -48,52 +48,65 @@ func parseName(data []byte, offset int) (string, int) {
 	return name[:len(name)-1], offset
 }
 
-func ParseResponse(response []byte) ([]DNSAnswer, error) {
+func ParseFullResponse(response []byte) ([]DNSAnswer, []DNSAnswer, []DNSAnswer, error) {
 	if len(response) < 12 {
-		return nil, fmt.Errorf("response too short to contain header")
+		return nil, nil, nil, fmt.Errorf("response too short to contain header")
 	}
 
 	header := parseHeader(response[:12])
-	if header.Flags&0x8000 == 0 {
-		return nil, fmt.Errorf("not a response")
-	}
-
-	if header.Flags&0x000F != 0 {
-		return nil, fmt.Errorf("response contains errors")
+	if header.Flags&0x8000 == 0 { // Check QR bit
+		return nil, nil, nil, fmt.Errorf("not a response")
 	}
 
 	offset := 12
+
 	for i := 0; i < int(header.QDCount); i++ {
 		_, newOffset := parseName(response, offset)
 		offset = newOffset + 4
 	}
 
 	answers := []DNSAnswer{}
-
 	for i := 0; i < int(header.ANCount); i++ {
-		name, newOffset := parseName(response, offset)
-		offset = newOffset
-
-		answer := DNSAnswer{
-			Name: name,
-		}
-
-		// Extract type, class, TTL, and data length
-		answer.Type = binary.BigEndian.Uint16(response[offset : offset+2])
-		answer.Class = binary.BigEndian.Uint16(response[offset+2 : offset+4])
-		answer.TTL = binary.BigEndian.Uint32(response[offset+4 : offset+8])
-		dataLen := binary.BigEndian.Uint16(response[offset+8 : offset+10])
-		offset += 10
-
-		if answer.Type == QTypeA && dataLen == 4 {
-			answer.Data = fmt.Sprintf("%d.%d.%d.%d", response[offset], response[offset+1], response[offset+2], response[offset+3])
-		} else {
-			answer.Data = fmt.Sprintf("unsupported type %d", answer.Type)
-		}
-		offset += int(dataLen)
-
+		answer, newOffset := parseResourceRecord(response, offset)
 		answers = append(answers, answer)
+		offset = newOffset
+	}
+	authorities := []DNSAnswer{}
+	for i := 0; i < int(header.NSCount); i++ {
+		authority, newOffset := parseResourceRecord(response, offset)
+		authorities = append(authorities, authority)
+		offset = newOffset
 	}
 
-	return answers, nil
+	additionals := []DNSAnswer{}
+	for i := 0; i < int(header.ARCount); i++ {
+		additional, newOffset := parseResourceRecord(response, offset)
+		additionals = append(additionals, additional)
+		offset = newOffset
+	}
+
+	return answers, authorities, additionals, nil
+}
+
+func parseResourceRecord(data []byte, offset int) (DNSAnswer, int) {
+	name, newOffset := parseName(data, offset)
+	offset = newOffset
+
+	answer := DNSAnswer{
+		Name:  name,
+		Type:  binary.BigEndian.Uint16(data[offset : offset+2]),
+		Class: binary.BigEndian.Uint16(data[offset+2 : offset+4]),
+		TTL:   binary.BigEndian.Uint32(data[offset+4 : offset+8]),
+	}
+	dataLen := binary.BigEndian.Uint16(data[offset+8 : offset+10])
+	offset += 10
+
+	if answer.Type == QTypeA && dataLen == 4 {
+		answer.Data = fmt.Sprintf("%d.%d.%d.%d", data[offset], data[offset+1], data[offset+2], data[offset+3])
+	} else if answer.Type == QTypeCNAME || answer.Type == QTypeNS {
+		answer.Data, _ = parseName(data, offset)
+	}
+	offset += int(dataLen)
+
+	return answer, offset
 }
