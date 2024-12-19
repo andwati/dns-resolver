@@ -36,4 +36,15 @@ func main() {
 	}
 
 	fmt.Printf("DNS Response: %x\n", response)
+
+	answers, err := dns.ParseResponse(response)
+	if err != nil {
+		log.Fatalf("Error parsing response: %s", err)
+	}
+
+	for _, answer := range answers {
+		fmt.Printf("Name: %s, Type: %d, Class: %d, TTL: %d, Data: %s\n",
+			answer.Name, answer.Type, answer.Class, answer.TTL, answer.Data)
+	}
+
 }
